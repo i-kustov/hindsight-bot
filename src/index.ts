@@ -71,20 +71,21 @@ async function recallMemories(query: string): Promise<string> {
 }
 
 // --- Save to Hindsight + write md file to vault ---
-async function retainMemory(content: string): Promise<void> {
+async function retainMemory(noteContent: string, memoryContent?: string): Promise<void> {
+  // Save to Hindsight — full context (user + assistant)
   try {
-    await hindsight.retain(BANK_ID, content);
+    await hindsight.retain(BANK_ID, memoryContent ?? noteContent);
   } catch (e) {
     console.error("Retain error:", e);
   }
 
-  // Also save as a note in the vault
+  // Save only user's text as a note in the vault
   try {
     const date = new Date().toISOString().slice(0, 10);
     const time = new Date().toISOString().slice(11, 19).replace(/:/g, "-");
     const filename = `memory-${date}-${time}.md`;
     const filepath = path.join(VAULT_REPO, filename);
-    const md = `# Воспоминание ${date} ${time.replace(/-/g, ":")}\n\n${content}\n`;
+    const md = `# Воспоминание ${date} ${time.replace(/-/g, ":")}\n\n${noteContent}\n`;
     fs.writeFileSync(filepath, md, "utf-8");
     execSync(
       `cd ${VAULT_REPO} && git add "${filename}" && git commit -m "memory: ${date} ${time}" && git push`,
@@ -187,7 +188,7 @@ bot.on("message:text", async (ctx: Context) => {
     // Save to Hindsight only if worth remembering
     const { retain } = await shouldRetain(userMessage, replyText);
     if (retain) {
-      retainMemory(userMessage);
+      retainMemory(userMessage, `User: ${userMessage}\nAssistant: ${replyText}`);
       console.log("Retained exchange.");
     }
   } catch (err) {
