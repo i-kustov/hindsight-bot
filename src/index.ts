@@ -2,6 +2,9 @@ import "dotenv/config";
 import { Bot, Context } from "grammy";
 import Anthropic from "@anthropic-ai/sdk";
 import { HindsightClient } from "@vectorize-io/hindsight-client";
+import { execSync } from "child_process";
+import * as fs from "fs";
+import * as path from "path";
 
 // --- Config ---
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN!;
@@ -9,6 +12,7 @@ const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY!;
 const ANTHROPIC_BASE_URL = process.env.ANTHROPIC_BASE_URL;
 const HINDSIGHT_URL = process.env.HINDSIGHT_URL || "http://localhost:8888";
 const BANK_ID = process.env.HINDSIGHT_BANK_ID || "default";
+const VAULT_REPO = process.env.VAULT_REPO || "/tmp/obsidian-vault";
 const MODEL = "claude-sonnet-4-6";
 
 // --- Clients ---
@@ -29,25 +33,44 @@ function getHistory(chatId: number) {
   return histories.get(chatId)!;
 }
 
+// --- Save note to Obsidian vault and push to GitHub ---
+async function saveNoteToVault(title: string, content: string): Promise<void> {
+  const date = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const filename = `${title}.md`;
+  const filepath = path.join(VAULT_REPO, filename);
+
+  const md = `# ${title}\n\n*${date}*\n\n${content}\n`;
+  fs.writeFileSync(filepath, md, "utf-8");
+
+  try {
+    execSync(
+      `cd ${VAULT_REPO} && git add "${filename}" && git commit -m "note: ${title}" && git push`,
+      { stdio: "pipe" }
+    );
+    console.log(`Pushed note: ${filename}`);
+  } catch (e: any) {
+    console.error("Git push error:", e.message);
+    throw e;
+  }
+}
+
 // --- Recall memories relevant to message ---
 async function recallMemories(query: string): Promise<string> {
   try {
     const result = await hindsight.recall(BANK_ID, query);
     if (!result.results || result.results.length === 0) return "";
-
     const lines = result.results
       .slice(0, 5)
       .map((r: any) => `- ${r.text}`)
       .join("\n");
-
-    return `Relevant memories:\n${lines}`;
+    return `Релевантные воспоминания:\n${lines}`;
   } catch (e) {
     console.error("Recall error:", e);
     return "";
   }
 }
 
-// --- Save message to memory ---
+// --- Save to Hindsight ---
 async function retainMemory(content: string): Promise<void> {
   try {
     await hindsight.retain(BANK_ID, content);
@@ -61,7 +84,13 @@ function buildSystemPrompt(memories: string): string {
   const base = `Ты личный AI-ассистент пользователя в Telegram. Ты вдумчивый, конкретный и искренне полезный.
 Ты помнишь вещи о пользователе со временем и используешь этот контекст чтобы давать более точные ответы.
 У тебя есть доступ к личным заметкам и мыслям пользователя — относись к ним с уважением и бережностью.
-Всегда отвечай на русском языке.`;
+Всегда отвечай на русском языке.
+
+Если пользователь хочет сохранить мысль или заметку, ответь JSON-объектом в таком формате (и только им, без другого текста):
+{"save_note": true, "title": "Название заметки", "content": "Полный текст заметки в маркдауне"}
+
+Сохранять стоит когда пользователь явно говорит "запомни", "сохрани", "запиши", "хочу записать" или явно делится мыслью для сохранения.
+В остальных случаях просто отвечай обычным текстом.`;
 
   if (memories) {
     return `${base}\n\n${memories}`;
@@ -74,15 +103,11 @@ bot.on("message:text", async (ctx: Context) => {
   const chatId = ctx.chat!.id;
   const userMessage = ctx.message!.text!;
 
-  // Show typing indicator
   await ctx.replyWithChatAction("typing");
 
   const history = getHistory(chatId);
-
-  // Recall relevant memories
   const memories = await recallMemories(userMessage);
 
-  // Build messages for Claude
   history.push({ role: "user", content: userMessage });
 
   try {
@@ -90,30 +115,51 @@ bot.on("message:text", async (ctx: Context) => {
       model: MODEL,
       max_tokens: 1024,
       system: buildSystemPrompt(memories),
-      messages: history.slice(-20), // keep last 20 turns
+      messages: history.slice(-20),
     });
 
     const assistantText =
       response.content[0].type === "text" ? response.content[0].text : "";
 
-    history.push({ role: "assistant", content: assistantText });
+    // Check if model wants to save a note
+    let replyText = assistantText;
+    try {
+      const parsed = JSON.parse(assistantText.trim());
+      if (parsed.save_note && parsed.title && parsed.content) {
+        await ctx.replyWithChatAction("typing");
 
-    // Reply to user
-    await ctx.reply(assistantText, { parse_mode: "Markdown" });
+        // Save to vault and push
+        await saveNoteToVault(parsed.title, parsed.content);
 
-    // Save the exchange to Hindsight (async, don't await)
-    retainMemory(`User: ${userMessage}\nAssistant: ${assistantText}`);
+        // Save to Hindsight
+        retainMemory(`# ${parsed.title}\n\n${parsed.content}`);
+
+        replyText = `✅ Сохранено в Obsidian: *${parsed.title}*`;
+        history.push({ role: "assistant", content: replyText });
+        await ctx.reply(replyText, { parse_mode: "Markdown" });
+        return;
+      }
+    } catch {
+      // Not JSON — normal reply
+    }
+
+    history.push({ role: "assistant", content: replyText });
+    await ctx.reply(replyText, { parse_mode: "Markdown" });
+
+    // Save exchange to Hindsight
+    retainMemory(`User: ${userMessage}\nAssistant: ${replyText}`);
   } catch (err) {
     console.error("LLM error:", err);
     await ctx.reply("Произошла ошибка, попробуй ещё раз.");
-    history.pop(); // remove failed user message
+    history.pop();
   }
 });
 
 // --- /start ---
 bot.command("start", async (ctx) => {
   await ctx.reply(
-    "Привет! Я знаю твои заметки и помню наши разговоры. Просто напиши мне что-нибудь 👋"
+    "Привет! Я знаю твои заметки и помню наши разговоры.\n\nПросто напиши мне что-нибудь, или скажи *«запомни»* — и я сохраню мысль в Obsidian 👋",
+    { parse_mode: "Markdown" }
   );
 });
 
@@ -126,7 +172,7 @@ bot.command("forget", async (ctx) => {
 
 // --- /memory ---
 bot.command("memory", async (ctx) => {
-  const query = ctx.match || "what do you know about me";
+  const query = ctx.match || "что ты знаешь обо мне";
   try {
     const result = await hindsight.recall(BANK_ID, query);
     if (!result.results || result.results.length === 0) {
