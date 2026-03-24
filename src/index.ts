@@ -70,12 +70,29 @@ async function recallMemories(query: string): Promise<string> {
   }
 }
 
-// --- Save to Hindsight ---
+// --- Save to Hindsight + write md file to vault ---
 async function retainMemory(content: string): Promise<void> {
   try {
     await hindsight.retain(BANK_ID, content);
   } catch (e) {
     console.error("Retain error:", e);
+  }
+
+  // Also save as a note in the vault
+  try {
+    const date = new Date().toISOString().slice(0, 10);
+    const time = new Date().toISOString().slice(11, 19).replace(/:/g, "-");
+    const filename = `memory-${date}-${time}.md`;
+    const filepath = path.join(VAULT_REPO, filename);
+    const md = `# Воспоминание ${date} ${time.replace(/-/g, ":")}\n\n${content}\n`;
+    fs.writeFileSync(filepath, md, "utf-8");
+    execSync(
+      `cd ${VAULT_REPO} && git add "${filename}" && git commit -m "memory: ${date} ${time}" && git push`,
+      { stdio: "pipe" }
+    );
+    console.log(`Saved memory note: ${filename}`);
+  } catch (e: any) {
+    console.error("Vault save error:", e.message);
   }
 }
 
