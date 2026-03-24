@@ -98,7 +98,28 @@ function buildSystemPrompt(memories: string): string {
   return base;
 }
 
-// --- Handle message ---
+// --- Decide if exchange is worth saving to memory ---
+async function shouldRetain(userMessage: string, assistantReply: string): Promise<{ retain: boolean; reason?: string }> {
+  try {
+    const response = await anthropic.messages.create({
+      model: MODEL,
+      max_tokens: 100,
+      system: `Ты решаешь стоит ли сохранить обмен сообщениями в долгосрочную память.
+Сохрани если: пользователь поделился чем-то личным, выразил мнение, рассказал о себе, своих планах, переживаниях, предпочтениях.
+НЕ сохраняй если: это просто вопрос-ответ, мелкий чат, команды боту, технические запросы.
+Ответь только JSON: {"retain": true/false}`,
+      messages: [
+        { role: "user", content: `User: ${userMessage}\nAssistant: ${assistantReply}` }
+      ],
+    });
+    const text = response.content[0].type === "text" ? response.content[0].text.trim() : "{}";
+    return JSON.parse(text);
+  } catch {
+    return { retain: false };
+  }
+}
+
+
 bot.on("message:text", async (ctx: Context) => {
   const chatId = ctx.chat!.id;
   const userMessage = ctx.message!.text!;
@@ -146,8 +167,12 @@ bot.on("message:text", async (ctx: Context) => {
     history.push({ role: "assistant", content: replyText });
     await ctx.reply(replyText, { parse_mode: "Markdown" });
 
-    // Save exchange to Hindsight
-    retainMemory(`User: ${userMessage}\nAssistant: ${replyText}`);
+    // Save to Hindsight only if worth remembering
+    const { retain } = await shouldRetain(userMessage, replyText);
+    if (retain) {
+      retainMemory(`User: ${userMessage}\nAssistant: ${replyText}`);
+      console.log("Retained exchange.");
+    }
   } catch (err) {
     console.error("LLM error:", err);
     await ctx.reply("Произошла ошибка, попробуй ещё раз.");
