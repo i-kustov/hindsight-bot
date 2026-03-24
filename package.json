@@ -1,0 +1,22 @@
+{
+  "name": "hindsight-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot with Hindsight memory",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.36.0",
+    "@vectorize-io/hindsight-client": "^0.4.20",
+    "dotenv": "^16.4.0",
+    "grammy": "^1.31.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}
