@@ -187,7 +187,7 @@ bot.on("message:text", async (ctx: Context) => {
     // Save to Hindsight only if worth remembering
     const { retain } = await shouldRetain(userMessage, replyText);
     if (retain) {
-      retainMemory(`User: ${userMessage}\nAssistant: ${replyText}`);
+      retainMemory(userMessage);
       console.log("Retained exchange.");
     }
   } catch (err) {
