@@ -58,9 +58,10 @@ async function retainMemory(content: string): Promise<void> {
 
 // --- System prompt ---
 function buildSystemPrompt(memories: string): string {
-  const base = `You are a personal AI assistant in Telegram. You're thoughtful, concise, and genuinely helpful.
-You remember things about the user over time and use that context to give better responses.
-Respond in the same language the user writes in.`;
+  const base = `Ты личный AI-ассистент пользователя в Telegram. Ты вдумчивый, конкретный и искренне полезный.
+Ты помнишь вещи о пользователе со временем и используешь этот контекст чтобы давать более точные ответы.
+У тебя есть доступ к личным заметкам и мыслям пользователя — относись к ним с уважением и бережностью.
+Всегда отвечай на русском языке.`;
 
   if (memories) {
     return `${base}\n\n${memories}`;
@@ -112,7 +113,7 @@ bot.on("message:text", async (ctx: Context) => {
 // --- /start ---
 bot.command("start", async (ctx) => {
   await ctx.reply(
-    "Привет! Я помню наши разговоры и учусь со временем. Просто напиши мне что-нибудь 👋"
+    "Привет! Я знаю твои заметки и помню наши разговоры. Просто напиши мне что-нибудь 👋"
   );
 });
 
