@@ -116,16 +116,23 @@ function buildSystemPrompt(memories: string): string {
   return base;
 }
 
-// --- Decide if exchange is worth saving to memory ---
-async function shouldRetain(userMessage: string, assistantReply: string): Promise<{ retain: boolean; reason?: string }> {
+// --- Decide if exchange is worth saving, and extract insight ---
+async function shouldRetain(userMessage: string, assistantReply: string): Promise<{ retain: boolean; insight?: string }> {
   try {
     const response = await anthropic.messages.create({
       model: MODEL,
-      max_tokens: 100,
-      system: `Ты решаешь стоит ли сохранить обмен сообщениями в долгосрочную память.
-Сохрани если: пользователь поделился чем-то личным, выразил мнение, рассказал о себе, своих планах, переживаниях, предпочтениях.
-НЕ сохраняй если: это просто вопрос-ответ, мелкий чат, команды боту, технические запросы.
-Ответь только JSON: {"retain": true/false}`,
+      max_tokens: 300,
+      system: `Ты анализируешь обмен сообщениями между пользователем и AI-ассистентом.
+
+Реши: стоит ли это сохранить в долгосрочную память?
+
+СОХРАНИ если пользователь: поделился чем-то личным, выразил мнение, рассказал о себе, своих планах, переживаниях, ценностях, предпочтениях, отношениях.
+НЕ СОХРАНЯЙ если: просто вопрос-ответ, мелкий чат, технический запрос, команды боту.
+
+Если стоит сохранить — сформулируй ёмкий инсайт (1-3 предложения) от третьего лица ("Иван..."). 
+Подмечай не только сказанное явно, но и подтекст, эмоции, связи с возможными паттернами.
+
+Ответь только JSON: {"retain": true/false, "insight": "...или null если retain=false"}`,
       messages: [
         { role: "user", content: `User: ${userMessage}\nAssistant: ${assistantReply}` }
       ],
@@ -223,10 +230,10 @@ bot.on("message:text", async (ctx: Context) => {
     await ctx.reply(replyText, { parse_mode: "Markdown" });
 
     // Save to Hindsight only if worth remembering
-    const { retain } = await shouldRetain(userMessage, replyText);
-    if (retain) {
-      retainMemory(userMessage, `User: ${userMessage}\nAssistant: ${replyText}`);
-      console.log("Retained exchange.");
+    const { retain, insight } = await shouldRetain(userMessage, replyText);
+    if (retain && insight) {
+      retainMemory(userMessage, insight);
+      console.log("Retained insight:", insight);
     }
   } catch (err) {
     console.error("LLM error:", err);
@@ -266,5 +273,17 @@ process.on("uncaughtException", (err: any) => {
     process.exit(1);
   }
 });
+
+// Graceful shutdown — stop bot cleanly so Telegram releases the session
+async function shutdown() {
+  console.log("Shutting down...");
+  try {
+    await bot.stop();
+  } catch {}
+  process.exit(0);
+}
+
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
 
 startBot();
