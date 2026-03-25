@@ -142,7 +142,8 @@ bot.on("message:text", async (ctx: Context) => {
   const chatId = ctx.chat!.id;
   const userMessage = ctx.message!.text!;
 
-  await ctx.replyWithChatAction("typing");
+  // Skip commands — they're handled separately
+  if (userMessage.startsWith("/")) return;
 
   const history = getHistory(chatId);
   const memories = await recallMemories(userMessage);
