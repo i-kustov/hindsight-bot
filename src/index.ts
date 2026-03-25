@@ -138,12 +138,48 @@ async function shouldRetain(userMessage: string, assistantReply: string): Promis
 }
 
 
+// --- /start ---
+bot.command("start", async (ctx) => {
+  await ctx.reply(
+    "Привет! Я знаю твои заметки и помню наши разговоры.\n\nПросто напиши мне что-нибудь, или скажи *«запомни»* — и я сохраню мысль в Obsidian 👋",
+    { parse_mode: "Markdown" }
+  );
+});
+
+// --- /forget ---
+bot.command("forget", async (ctx) => {
+  const chatId = ctx.chat!.id;
+  histories.delete(chatId);
+  await ctx.reply("История этого разговора очищена. Начинаем с чистого листа.");
+});
+
+// --- /memory ---
+bot.command("memory", async (ctx) => {
+  const query = ctx.match || "что ты знаешь обо мне";
+  try {
+    const result = await hindsight.recall(BANK_ID, query);
+    if (!result.results || result.results.length === 0) {
+      await ctx.reply("Пока ничего не запомнил 🤷");
+      return;
+    }
+    const lines = result.results
+      .slice(0, 8)
+      .map((r: any, i: number) => `${i + 1}. ${r.text}`)
+      .join("\n\n");
+    await ctx.reply(`🧠 Что я знаю:\n\n${lines}`);
+  } catch (e) {
+    await ctx.reply("Не могу достать воспоминания.");
+  }
+});
+
 bot.on("message:text", async (ctx: Context) => {
   const chatId = ctx.chat!.id;
   const userMessage = ctx.message!.text!;
 
-  // Skip commands — they're handled separately
+  // Skip commands — handled by bot.command()
   if (userMessage.startsWith("/")) return;
+
+  await ctx.replyWithChatAction("typing");
 
   const history = getHistory(chatId);
   const memories = await recallMemories(userMessage);
@@ -199,42 +235,36 @@ bot.on("message:text", async (ctx: Context) => {
   }
 });
 
-// --- /start ---
-bot.command("start", async (ctx) => {
-  await ctx.reply(
-    "Привет! Я знаю твои заметки и помню наши разговоры.\n\nПросто напиши мне что-нибудь, или скажи *«запомни»* — и я сохраню мысль в Obsidian 👋",
-    { parse_mode: "Markdown" }
-  );
-});
-
-// --- /forget ---
-bot.command("forget", async (ctx) => {
-  const chatId = ctx.chat!.id;
-  histories.delete(chatId);
-  await ctx.reply("История этого разговора очищена. Начинаем с чистого листа.");
-});
-
-// --- /memory ---
-bot.command("memory", async (ctx) => {
-  const query = ctx.match || "что ты знаешь обо мне";
-  try {
-    const result = await hindsight.recall(BANK_ID, query);
-    if (!result.results || result.results.length === 0) {
-      await ctx.reply("Пока ничего не запомнил 🤷");
-      return;
+// --- Start bot with retry on 409 ---
+async function startBot() {
+  while (true) {
+    try {
+      console.log("Starting Hindsight bot...");
+      await bot.start({
+        onStart: () => console.log("Bot is running!"),
+      });
+      break;
+    } catch (err: any) {
+      if (err?.error_code === 409 || String(err).includes("409")) {
+        console.log("409 Conflict — retrying in 35s...");
+        bot.isRunning() && await bot.stop();
+        await new Promise(r => setTimeout(r, 35000));
+      } else {
+        console.error("Fatal error:", err);
+        process.exit(1);
+      }
     }
-    const lines = result.results
-      .slice(0, 8)
-      .map((r: any, i: number) => `${i + 1}. ${r.text}`)
-      .join("\n\n");
-    await ctx.reply(`🧠 Что я знаю:\n\n${lines}`);
-  } catch (e) {
-    await ctx.reply("Не могу достать воспоминания.");
+  }
+}
+
+process.on("uncaughtException", (err: any) => {
+  if (err?.error_code === 409 || String(err).includes("409")) {
+    console.log("Uncaught 409, will restart...");
+    setTimeout(() => startBot(), 35000);
+  } else {
+    console.error("Uncaught exception:", err);
+    process.exit(1);
   }
 });
 
-// --- Start bot ---
-console.log("Starting Hindsight bot...");
-bot.start({
-  onStart: () => console.log("Bot is running!"),
-});
+startBot();
